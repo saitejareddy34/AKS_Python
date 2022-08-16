@@ -1,0 +1,21 @@
+apiVersion : apps/v1
+kind: Deployment
+metadata:
+  name: pythonapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pythonapp
+  template:
+    metadata:
+      labels:
+        app: pythonapp
+    spec:
+      nodeSelector:
+        "kubernetes.io/os": linux
+      containers:
+        - name: pythonapp
+          image: labappacr001.azurecr.io/app/pythonapp
+          ports:
+          - containerPort: 5000

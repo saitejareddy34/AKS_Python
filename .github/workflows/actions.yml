@@ -1,0 +1,156 @@
+name: Python App CI/CD
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  REPONAME: ${{ github.event.repository.name }}
+  WORKSPACE: ${{ github.workspace }}
+  client_id: ${{secrets.CLIENT_ID}}
+  client_secret: ${{secrets.CLIENT_SECRET}}
+  tenant_id: ${{secrets.TENANT_ID}}
+  subscription_id: ${{secrets.SUBSCRIPTION_ID}}
+  sas_token: ${{secrets.SAS_TOKEN}}
+  acr: "labappacr001"
+  aks_cluster_name: "labappaks001"
+  acr_fqdn: "labappacr001.azurecr.io"
+  az_rg: "azure_infra_rg"
+
+
+jobs:
+  Infra:
+    name: "Infra setup in Azure"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+        with:
+          fetch-depth: 0
+          
+      - name: Print terraform version
+        run: terraform version
+      
+      - name: Export Azure Login Credentials
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SAS_TOKEN=${{ secrets.SAS_TOKEN }}" >> $GITHUB_ENV
+          
+      - name: Initalize Terraform
+        run: terraform init
+        working-directory: infra
+
+      - name: terraform plan
+        run: terraform plan -var="client_id=${{secrets.client_id}}" -var="client_secret=${{secrets.client_secret}}" -var="tenant_id=${{secrets.tenant_id}}" -var="subscription_id=${{secrets.subscription_id}}" -var="acr=$acr" -var="aks_cluster_name=$aks_cluster_name" -var="rgname=$az_rg" -out=tfplan
+        working-directory: infra
+
+      - name: terraform apply
+        run: terraform apply -auto-approve "tfplan"
+        working-directory: infra
+  
+  Docker:
+    name: "Build and Push Python Docker image"
+    needs: Infra
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+        with:
+          fetch-depth: 0
+      
+      - name: Export Azure Login Credentials
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SAS_TOKEN=${{ secrets.SAS_TOKEN }}" >> $GITHUB_ENV
+          
+      - name: Docker build
+        run: |
+          docker build -t pythonapp . -f DockerFile
+          docker tag pythonapp $acr_fqdn/app/pythonapp
+        working-directory: app
+
+      - name: Docker Login and Push
+        run: |
+          docker login $acr_fqdn --username $client_id --password $client_secret
+          docker push $acr_fqdn/app/pythonapp
+        working-directory: app
+  
+  K8s:
+    name: "Deploy Docker images to K8s"
+    needs: [Infra, Docker]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+        with:
+          fetch-depth: 0
+      
+      - name: Export Azure Login Credentials
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=${{ secrets.CLIENT_SECRET }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SAS_TOKEN=${{ secrets.SAS_TOKEN }}" >> $GITHUB_ENV
+      
+      - name: az login
+        run: |
+          az login --service-principal -u $client_id -p $client_secret --tenant $tenant_id
+          az account set --subscription $subscription_id
+        working-directory: manifests
+
+      - name: Install Kubectl Utility
+        run: |
+          sudo az aks install-cli
+        working-directory: manifests
+
+      - name: Configure ACR  for AKS clusters
+        run: |
+          az aks update -n $aks_cluster_name -g $az_rg --attach-acr $acr
+        working-directory: manifests
+      
+      - name: Connect to AKS Cluster
+        run: |
+          az aks get-credentials --resource-group $az_rg --name $aks_cluster_name
+        working-directory: manifests
+
+      - name: Deploy Python Application
+        run: |
+          export image=$acr_fqdn/app/pythonapp
+          envsubst < deployment.yml | kubectl apply -f deployment.yml
+          sleep 20s
+        working-directory: manifests
+      
+      - name: Deploy service to AKS Cluster
+        run: |
+          kubectl apply -f service.yml
+          sleep 20s
+        working-directory: manifests
+      
+      - name: Get Pods
+        run: |
+         kubectl get pods
+        working-directory: manifests
+      
+      - name: Get external IP of services
+        run: |
+          kubectl get services
+        working-directory: manifests
+
+      

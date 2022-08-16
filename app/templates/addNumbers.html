@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Index page</title>
+</head>
+<body>
+<h4 class="form">Add numbers!</h4>
+<div class="container form">
+    <hr>
+    <br>
+    <form action="/" method="post">
+
+        {{ form.hidden_tag() }}
+        <div class="form-group">
+            {{ form.num1.label }}
+            {{ form.num1 }}
+        </div>
+        <div class="form-group">
+            {{ form.num2.label }}
+            {{ form.num2 }}
+        </div>
+        <div class="form-group">
+            {{ form.submit }}
+        </div>
+    </form>
+    <hr>
+    {% if (sum)  %}
+    <p>Sum is {{ sum }}</p>
+    {% endif %}
+    <hr>
+</div>
+
+</body>
+</html>
